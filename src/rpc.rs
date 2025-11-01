@@ -1,0 +1,2 @@
+//! Solana WebSocket RPC client
+
