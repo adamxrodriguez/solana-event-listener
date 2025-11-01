@@ -8,6 +8,7 @@ use crate::storage::JsonlWriter;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, trace, warn};
@@ -66,7 +67,13 @@ struct LogsNotificationValue {
     signature: String,
 }
 
-/// Run logs subscription
+/// Calculate exponential backoff delay with max cap
+fn calculate_backoff(attempt: u32, max_seconds: u64) -> Duration {
+    let delay_secs = (1u64 << attempt.min(5)).min(max_seconds);
+    Duration::from_secs(delay_secs)
+}
+
+/// Run logs subscription with automatic reconnection
 pub async fn run_logs_subscribe(
     config: &Config,
     writer: JsonlWriter,
@@ -76,6 +83,42 @@ pub async fn run_logs_subscribe(
     let program_id = config.program_id.as_ref().unwrap();
     let commitment = config.commitment.as_str();
 
+    let mut attempt = 0u32;
+    loop {
+        match try_logs_subscribe(ws_url, program_id, commitment, &writer, &metrics).await {
+            Ok(()) => {
+                info!("Logs subscription loop exited normally");
+                break Ok(());
+            }
+            Err(e) => {
+                error!("Logs subscription error: {}", e);
+                metrics.errors_total.inc();
+                metrics.ws_connected.set(0.0);
+                
+                // Calculate backoff
+                let backoff = calculate_backoff(attempt, 30);
+                attempt += 1;
+                
+                warn!("Reconnecting in {:?} (attempt {})", backoff, attempt);
+                tokio::time::sleep(backoff).await;
+                
+                // Reset backoff counter on every 10 attempts to prevent overflow
+                if attempt >= 10 {
+                    attempt = 0;
+                }
+            }
+        }
+    }
+}
+
+/// Try to run logs subscription (single attempt)
+async fn try_logs_subscribe(
+    ws_url: &str,
+    program_id: &str,
+    commitment: &str,
+    writer: &JsonlWriter,
+    metrics: &MetricsRegistry,
+) -> Result<()> {
     info!("Connecting to Solana WebSocket: {}", ws_url);
     
     // Set connected gauge to 0 initially
@@ -87,8 +130,6 @@ pub async fn run_logs_subscribe(
         .context("Failed to connect to WebSocket")?;
 
     info!("Connected to WebSocket");
-
-    // Set connected gauge to 1
     metrics.ws_connected.set(1.0);
 
     // Split the stream for read/write
@@ -129,20 +170,18 @@ pub async fn run_logs_subscribe(
                 }
             }
             Ok(Message::Ping(data)) => {
-                // Respond to ping with pong
                 if let Err(e) = write.send(Message::Pong(data)).await {
                     error!("Failed to send pong: {}", e);
-                    break;
+                    anyhow::bail!("Failed to send pong");
                 }
             }
             Ok(Message::Pong(_)) => {
-                // Pong received
                 trace!("Received pong");
             }
             Ok(Message::Close(_)) => {
                 warn!("WebSocket closed by server");
                 metrics.ws_connected.set(0.0);
-                break;
+                anyhow::bail!("WebSocket closed by server");
             }
             Ok(Message::Binary(_)) => {
                 warn!("Received unexpected binary message");
@@ -154,12 +193,13 @@ pub async fn run_logs_subscribe(
                 error!("WebSocket error: {}", e);
                 metrics.errors_total.inc();
                 metrics.ws_connected.set(0.0);
-                break;
+                anyhow::bail!("WebSocket error: {}", e);
             }
         }
     }
 
-    Ok(())
+    // Stream ended
+    anyhow::bail!("WebSocket stream ended");
 }
 
 /// Handle incoming WebSocket message
@@ -273,7 +313,7 @@ struct AccountData {
     data: Vec<String>,  // base64 encoded
 }
 
-/// Run account subscription
+/// Run account subscription with automatic reconnection
 pub async fn run_account_subscribe(
     config: &Config,
     writer: JsonlWriter,
@@ -287,9 +327,44 @@ pub async fn run_account_subscribe(
         anyhow::bail!("No accounts provided for account subscription");
     }
 
+    let mut attempt = 0u32;
+    loop {
+        match try_account_subscribe(ws_url, &accounts, commitment, &writer, &metrics).await {
+            Ok(()) => {
+                info!("Account subscription loop exited normally");
+                break Ok(());
+            }
+            Err(e) => {
+                error!("Account subscription error: {}", e);
+                metrics.errors_total.inc();
+                metrics.ws_connected.set(0.0);
+                
+                // Calculate backoff
+                let backoff = calculate_backoff(attempt, 30);
+                attempt += 1;
+                
+                warn!("Reconnecting in {:?} (attempt {})", backoff, attempt);
+                tokio::time::sleep(backoff).await;
+                
+                // Reset backoff counter on every 10 attempts
+                if attempt >= 10 {
+                    attempt = 0;
+                }
+            }
+        }
+    }
+}
+
+/// Try to run account subscription (single attempt)
+async fn try_account_subscribe(
+    ws_url: &str,
+    accounts: &[String],
+    commitment: &str,
+    writer: &JsonlWriter,
+    metrics: &MetricsRegistry,
+) -> Result<()> {
     info!("Connecting to Solana WebSocket: {}", ws_url);
     
-    // Set connected gauge to 0 initially
     metrics.ws_connected.set(0.0);
 
     // Connect to WebSocket
@@ -305,7 +380,7 @@ pub async fn run_account_subscribe(
 
     // Subscribe to all accounts
     let mut subscription_id = 1u64;
-    for account in &accounts {
+    for account in accounts {
         let subscribe_request = RpcRequest {
             jsonrpc: "2.0".to_string(),
             id: subscription_id,
@@ -344,7 +419,7 @@ pub async fn run_account_subscribe(
             Ok(Message::Ping(data)) => {
                 if let Err(e) = write.send(Message::Pong(data)).await {
                     error!("Failed to send pong: {}", e);
-                    break;
+                    anyhow::bail!("Failed to send pong");
                 }
             }
             Ok(Message::Pong(_)) => {
@@ -353,7 +428,7 @@ pub async fn run_account_subscribe(
             Ok(Message::Close(_)) => {
                 warn!("WebSocket closed by server");
                 metrics.ws_connected.set(0.0);
-                break;
+                anyhow::bail!("WebSocket closed by server");
             }
             Ok(Message::Binary(_)) => {
                 warn!("Received unexpected binary message");
@@ -365,12 +440,13 @@ pub async fn run_account_subscribe(
                 error!("WebSocket error: {}", e);
                 metrics.errors_total.inc();
                 metrics.ws_connected.set(0.0);
-                break;
+                anyhow::bail!("WebSocket error: {}", e);
             }
         }
     }
 
-    Ok(())
+    // Stream ended
+    anyhow::bail!("WebSocket stream ended");
 }
 
 /// Handle incoming WebSocket message for account subscriptions
@@ -443,4 +519,28 @@ async fn handle_account_notification(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_backoff() {
+        // Test exponential backoff
+        assert_eq!(calculate_backoff(0, 30), Duration::from_secs(1));
+        assert_eq!(calculate_backoff(1, 30), Duration::from_secs(2));
+        assert_eq!(calculate_backoff(2, 30), Duration::from_secs(4));
+        assert_eq!(calculate_backoff(3, 30), Duration::from_secs(8));
+        assert_eq!(calculate_backoff(4, 30), Duration::from_secs(16));
+        assert_eq!(calculate_backoff(5, 30), Duration::from_secs(30));
+
+        // Test max cap
+        assert_eq!(calculate_backoff(10, 30), Duration::from_secs(30));
+        assert_eq!(calculate_backoff(100, 30), Duration::from_secs(30));
+
+        // Test different max_seconds
+        assert_eq!(calculate_backoff(3, 10), Duration::from_secs(8));
+        assert_eq!(calculate_backoff(4, 10), Duration::from_secs(10));
+    }
 }
