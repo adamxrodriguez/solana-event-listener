@@ -68,6 +68,26 @@ cargo run --release -- --mode account --accounts <PUBKEY1,PUBKEY2>
 cargo run --release -- --metrics-addr 0.0.0.0:9999
 ```
 
+### Docker Compose (Recommended for Production)
+
+Start with Prometheus and Grafana:
+
+```bash
+# Build and start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f solana-event-listener
+
+# Stop services
+docker-compose down
+```
+
+Access dashboards:
+- **Prometheus**: http://localhost:9090
+- **Grafana**: http://localhost:3000 (default: `admin`/`admin`)
+- **Metrics**: http://localhost:9108/metrics
+
 ### Check Metrics
 
 ```bash
@@ -116,6 +136,27 @@ CLI flags override environment variables.
 
 ```json
 {"timestamp":"2024-01-15T10:30:45Z","pubkey":"Address...","slot":12345,"lamports":1000000,"data":"base64..."}
+```
+
+## Terminal Output Example
+
+Running in logs mode produces output like:
+
+```
+$ cargo run --release -- --mode logs --program-id ComputeBudget111111111111111111111111111111
+
+2024-01-15T10:30:45.123Z INFO Starting Solana Event Listener v0.1.0
+2024-01-15T10:30:45.125Z INFO Configuration loaded: mode=logs
+2024-01-15T10:30:45.126Z INFO Metrics registry initialized
+2024-01-15T10:30:45.127Z INFO Metrics server spawned on 0.0.0.0:9108
+2024-01-15T10:30:45.128Z INFO Storage initialized: ./events.jsonl
+2024-01-15T10:30:45.129Z INFO Starting logs subscription mode
+2024-01-15T10:30:45.130Z INFO Connecting to Solana WebSocket: wss://api.mainnet-beta.solana.com/
+2024-01-15T10:30:45.456Z INFO Connected to WebSocket
+2024-01-15T10:30:45.457Z INFO Sending subscription request for program: ComputeBudget111111111111111111111111111111
+2024-01-15T10:30:45.500Z INFO Subscribed to logs for program: ComputeBudget111111111111111111111111111111
+2024-01-15T10:30:46.200Z INFO Event: signature=5VeK..., slot=245000000, program=ComputeBudget111111111111111111111111111111, log_lines=3
+2024-01-15T10:30:47.100Z INFO Event: signature=7XmP..., slot=245000001, program=ComputeBudget111111111111111111111111111111, log_lines=2
 ```
 
 ## Architecture
