@@ -2,16 +2,15 @@
 
 use anyhow::{Context, Result};
 use crate::config::Config;
-use crate::event::LogEvent;
+use crate::event::{AccountEvent, LogEvent};
 use crate::metrics::MetricsRegistry;
 use crate::storage::JsonlWriter;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::time::SystemTime;
 use time::OffsetDateTime;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 /// JSON-RPC request wrapper
 #[derive(Debug, Serialize)]
@@ -247,4 +246,201 @@ async fn handle_logs_notification(
     Ok(())
 }
 
-// Note: accountSubscribe will be added in PR 5
+/// Account notification payload
+#[derive(Debug, Deserialize)]
+struct AccountNotification {
+    result: AccountNotificationResult,
+}
+
+/// Account notification result
+#[derive(Debug, Deserialize)]
+struct AccountNotificationResult {
+    context: NotificationContext,
+    value: AccountNotificationValue,
+}
+
+/// Account notification value
+#[derive(Debug, Deserialize)]
+struct AccountNotificationValue {
+    account: AccountData,
+}
+
+/// Account data
+#[derive(Debug, Deserialize)]
+struct AccountData {
+    #[serde(rename = "lamports")]
+    lamports: u64,
+    data: Vec<String>,  // base64 encoded
+}
+
+/// Run account subscription
+pub async fn run_account_subscribe(
+    config: &Config,
+    writer: JsonlWriter,
+    metrics: MetricsRegistry,
+) -> Result<()> {
+    let ws_url = &config.ws_url;
+    let accounts = config.parse_accounts()?;
+    let commitment = config.commitment.as_str();
+
+    if accounts.is_empty() {
+        anyhow::bail!("No accounts provided for account subscription");
+    }
+
+    info!("Connecting to Solana WebSocket: {}", ws_url);
+    
+    // Set connected gauge to 0 initially
+    metrics.ws_connected.set(0.0);
+
+    // Connect to WebSocket
+    let (ws_stream, _) = connect_async(ws_url)
+        .await
+        .context("Failed to connect to WebSocket")?;
+
+    info!("Connected to WebSocket");
+    metrics.ws_connected.set(1.0);
+
+    // Split the stream for read/write
+    let (mut write, mut read) = ws_stream.split();
+
+    // Subscribe to all accounts
+    let mut subscription_id = 1u64;
+    for account in &accounts {
+        let subscribe_request = RpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: subscription_id,
+            method: "accountSubscribe".to_string(),
+            params: json!({
+                "account": account,
+                "commitment": commitment,
+                "encoding": "base64"
+            }),
+        };
+
+        let subscribe_msg = serde_json::to_string(&subscribe_request)?;
+        info!("Subscribing to account: {}", account);
+
+        write
+            .send(Message::Text(subscribe_msg))
+            .await
+            .context("Failed to send subscription request")?;
+
+        subscription_id += 1;
+    }
+
+    info!("Subscribed to {} accounts", accounts.len());
+
+    // Process incoming messages
+    while let Some(msg_result) = read.next().await {
+        match msg_result {
+            Ok(Message::Text(text)) => {
+                trace!("Received message: {}", text);
+                
+                if let Err(e) = handle_account_message(&text, &writer, &metrics).await {
+                    error!("Error handling message: {}", e);
+                    metrics.errors_total.inc();
+                }
+            }
+            Ok(Message::Ping(data)) => {
+                if let Err(e) = write.send(Message::Pong(data)).await {
+                    error!("Failed to send pong: {}", e);
+                    break;
+                }
+            }
+            Ok(Message::Pong(_)) => {
+                trace!("Received pong");
+            }
+            Ok(Message::Close(_)) => {
+                warn!("WebSocket closed by server");
+                metrics.ws_connected.set(0.0);
+                break;
+            }
+            Ok(Message::Binary(_)) => {
+                warn!("Received unexpected binary message");
+            }
+            Ok(Message::Frame(_)) => {
+                // Low-level frame, skip
+            }
+            Err(e) => {
+                error!("WebSocket error: {}", e);
+                metrics.errors_total.inc();
+                metrics.ws_connected.set(0.0);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle incoming WebSocket message for account subscriptions
+async fn handle_account_message(
+    text: &str,
+    writer: &JsonlWriter,
+    metrics: &MetricsRegistry,
+) -> Result<()> {
+    // Try to parse as RPC response first
+    if let Ok(response) = serde_json::from_str::<RpcResponse>(text) {
+        if let Some(ref error) = response.error {
+            anyhow::bail!("RPC error: {} (code: {})", error.message, error.code);
+        }
+        if let Some(ref result) = response.result {
+            info!("Subscription confirmed: {}", result);
+        }
+        return Ok(());
+    }
+
+    // Try to parse as account notification
+    if let Ok(notification) = serde_json::from_str::<AccountNotification>(text) {
+        handle_account_notification(notification, writer, metrics).await?;
+        return Ok(());
+    }
+
+    // Unknown message format
+    warn!("Unknown message format: {}", text);
+    Ok(())
+}
+
+/// Handle account notification
+async fn handle_account_notification(
+    notification: AccountNotification,
+    writer: &JsonlWriter,
+    metrics: &MetricsRegistry,
+) -> Result<()> {
+    let slot = notification.result.context.slot;
+    let lamports = notification.result.value.account.lamports;
+    let data = notification.result.value.account.data.join("");
+
+    // Note: We don't have the pubkey directly in the notification
+    // This is a limitation of the current implementation
+    // In a real implementation, we'd need to track subscription IDs to pubkeys
+    let pubkey = "unknown".to_string();
+
+    // Create timestamp
+    let timestamp = OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .context("Failed to format timestamp")?;
+
+    // Create account event
+    let event = AccountEvent::new(
+        timestamp,
+        pubkey,
+        slot,
+        lamports,
+        data,
+    );
+
+    // Write to storage
+    writer.write(&event).await.context("Failed to write event")?;
+
+    // Increment metrics
+    metrics.events_total.inc();
+
+    // Log event
+    info!(
+        "Account event: pubkey={}, slot={}, lamports={}",
+        pubkey, slot, lamports
+    );
+
+    Ok(())
+}

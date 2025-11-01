@@ -47,8 +47,8 @@ async fn main() -> Result<()> {
             rpc::run_logs_subscribe(&config, writer, metrics).await?;
         }
         config::Mode::Account => {
-            info!("Account mode not yet implemented (PR 5)");
-            return Err(anyhow::anyhow!("Account mode not yet implemented"));
+            info!("Starting account subscription mode");
+            rpc::run_account_subscribe(&config, writer, metrics).await?;
         }
     }
 
