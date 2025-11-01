@@ -7,6 +7,7 @@ mod storage;
 
 use anyhow::Result;
 use config::Config;
+use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
@@ -19,15 +20,27 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    tracing::info!("Starting Solana Event Listener v0.1.0");
+    info!("Starting Solana Event Listener v0.1.0");
 
     // Load configuration
     let config = Config::load()?;
-    tracing::info!("Configuration loaded: mode={:?}", config.mode.as_str());
+    info!("Configuration loaded: mode={:?}", config.mode.as_str());
 
-    // For now, just print a placeholder message
-    tracing::info!("Event listener ready (implementation in progress)");
+    // Initialize metrics registry
+    let metrics = metrics::MetricsRegistry::default();
+    info!("Metrics registry initialized");
+
+    // Spawn metrics server
+    let metrics_addr = config.metrics_socket_addr()?;
+    let _metrics_handle = metrics.spawn_server(metrics_addr);
+    info!("Metrics server spawned on {}", metrics_addr);
+
+    // For now, just keep the process running
+    info!("Event listener ready (implementation in progress)");
+
+    // Wait indefinitely (we'll add proper shutdown in PR 6)
+    tokio::signal::ctrl_c().await?;
+    info!("Shutting down...");
 
     Ok(())
 }
-
