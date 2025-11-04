@@ -4,8 +4,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::Path;
-use tracing::{error, trace};
+use tracing::trace;
 
 /// JSONL file writer for append-only event storage
 pub struct JsonlWriter {

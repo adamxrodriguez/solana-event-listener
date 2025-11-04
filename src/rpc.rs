@@ -5,10 +5,10 @@ use crate::config::Config;
 use crate::event::{AccountEvent, LogEvent};
 use crate::metrics::MetricsRegistry;
 use crate::storage::JsonlWriter;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use time::OffsetDateTime;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, trace, warn};
@@ -500,7 +500,7 @@ async fn handle_account_notification(
     // Create account event
     let event = AccountEvent::new(
         timestamp,
-        pubkey,
+        pubkey.clone(),
         slot,
         lamports,
         data,
