@@ -25,7 +25,7 @@ This project leverages Rust for:
 
 ### Prerequisites
 
-- Rust 1.70+ (install via [rustup](https://rustup.rs/))
+- Rust 1.83+ (install via [rustup](https://rustup.rs/))
 - Solana mainnet-beta RPC access
 
 ### Installation
