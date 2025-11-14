@@ -59,6 +59,7 @@ impl MetricsRegistry {
     }
 
     /// Start metrics HTTP server
+    #[allow(dead_code)]
     pub async fn start_server(&self, addr: SocketAddr) -> Result<()> {
         let app = Router::new().route("/metrics", get(metrics_handler));
 

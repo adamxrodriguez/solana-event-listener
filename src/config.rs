@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use dotenvy;
 use std::net::SocketAddr;
 
 /// Solana event listener configuration

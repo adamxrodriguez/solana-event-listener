@@ -7,12 +7,14 @@
 use anyhow::Result;
 
 /// Trait for notifying about events
+#[allow(dead_code)]
 pub trait Notifier: Send + Sync {
     /// Send a notification message
     async fn notify(&self, message: &str) -> Result<()>;
 }
 
 /// Stub notifier that does nothing
+#[allow(dead_code)]
 pub struct StubNotifier;
 
 impl Notifier for StubNotifier {

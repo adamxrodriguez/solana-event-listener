@@ -49,6 +49,7 @@ impl JsonlWriter {
     }
 
     /// Get the file path
+    #[allow(dead_code)]
     pub fn file_path(&self) -> &str {
         &self.file_path
     }

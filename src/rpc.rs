@@ -25,7 +25,9 @@ struct RpcRequest {
 /// JSON-RPC response wrapper
 #[derive(Debug, Deserialize)]
 struct RpcResponse {
+    #[allow(dead_code)]
     jsonrpc: String,
+    #[allow(dead_code)]
     id: u64,
     #[serde(default)]
     result: Option<serde_json::Value>,
@@ -62,6 +64,7 @@ struct NotificationContext {
 /// Logs notification value
 #[derive(Debug, Deserialize)]
 struct LogsNotificationValue {
+    #[allow(dead_code)]
     err: Option<serde_json::Value>,
     logs: Vec<String>,
     signature: String,
@@ -164,7 +167,7 @@ async fn try_logs_subscribe(
             Ok(Message::Text(text)) => {
                 trace!("Received message: {}", text);
                 
-                if let Err(e) = handle_message(&text, &writer, &metrics).await {
+                if let Err(e) = handle_message(&text, writer, metrics).await {
                     error!("Error handling message: {}", e);
                     metrics.errors_total.inc();
                 }
@@ -411,7 +414,7 @@ async fn try_account_subscribe(
             Ok(Message::Text(text)) => {
                 trace!("Received message: {}", text);
                 
-                if let Err(e) = handle_account_message(&text, &writer, &metrics).await {
+                if let Err(e) = handle_account_message(&text, writer, metrics).await {
                     error!("Error handling message: {}", e);
                     metrics.errors_total.inc();
                 }
