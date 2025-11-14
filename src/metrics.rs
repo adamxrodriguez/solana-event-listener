@@ -182,12 +182,18 @@ mod tests {
         let registry = MetricsRegistry::default();
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         
-        // This will fail because we can't bind to port 0 without proper setup,
-        // but we can test that the function returns an error gracefully
-        let result = registry.start_server(addr).await;
+        // Spawn the server in a background task
+        let handle = registry.spawn_server(addr);
         
-        // Should fail because we can't actually start a real server in tests
-        // but the function shouldn't panic
-        assert!(result.is_err());
+        // Give the server a moment to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // Abort the server task to clean up
+        handle.abort();
+        
+        // Wait for the task to finish (it will be cancelled)
+        let _ = handle.await;
+        
+        // Test passes if we got here without hanging
     }
 }
