@@ -58,12 +58,12 @@ impl JsonlWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
     use tempfile::NamedTempFile;
     use std::fs;
     use std::io::{BufRead, BufReader};
 
-    #[derive(Serialize)]
+    #[derive(Serialize, Deserialize)]
     struct TestEvent {
         id: u64,
         message: String,
